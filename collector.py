@@ -3,7 +3,7 @@ from prometheus_client.core import GaugeMetricFamily, InfoMetricFamily
 import logging
 import os
 import time
-from enum import Enum
+import enum
 
 import pyeapi
 
@@ -21,7 +21,7 @@ PORT_STATS_NAMES = [
 ]
 
 
-class BGPState(Enum):
+class BGPState(enum.Enum):
     Active = 0
     Connect = 1
     Idle = 2
@@ -339,34 +339,16 @@ class AristaMetricsCollector(object):
             labels=labels + ["router_id"],
         )
 
-        for vrf, vrf_data in ipv4.items():
-            if "peers" not in vrf_data:
-                continue
-            router_id = vrf_data["routerId"]
-            for peer, peer_data in vrf_data["peers"].items():
-                labels = {
-                    "vrf": vrf,
-                    "router_id": router_id,
-                    "peer": peer,
-                    "asn": str(peer_data["asn"]),
-                }
-                peer_state.add_metric(labels=labels, value=BGPState[peer_data["peerState"]].value)
-                labels = [vrf, peer, str(peer_data["asn"])]
-                prefixes.add_metric(value=peer_data["prefixReceived"], labels=labels)
-        for vrf, vrf_data in ipv6.items():
-            if "peers" not in vrf_data:
-                continue
-            router_id = vrf_data["routerId"]
-            for peer, peer_data in vrf_data["peers"].items():
-                labels = {
-                    "vrf": vrf,
-                    "router_id": router_id,
-                    "peer": peer,
-                    "asn": str(peer_data["asn"]),
-                }
-                peer_state.add_metric(labels=labels, value=BGPState[peer_data["peerState"]].value)
-                labels = [vrf, peer, str(peer_data["asn"])]
-                prefixes.add_metric(value=peer_data["prefixReceived"], labels=labels)
+        for proto in (ipv4, ipv6):
+            for vrf, vrf_data in proto.items():
+                if "peers" not in vrf_data:
+                    continue
+                router_id = vrf_data["routerId"]
+                for peer, peer_data in vrf_data["peers"].items():
+                    prefix_labels = [vrf, peer, str(peer_data["asn"])]
+                    peer_state.add_metric(labels=prefix_labels + [router_id], value=BGPState[peer_data["peerState"]].value)
+                    prefixes.add_metric(labels=prefix_labels, value=peer_data["prefixReceived"])
+
         yield peer_state
         yield prefixes
 
@@ -471,9 +453,9 @@ class AristaMetricsCollector(object):
             )
 
             for name, generator in self.get_modules().items():
-                start = time.time()
+                start = time.perf_counter()
                 for metric in generator():
                     yield metric
-                end = time.time()
+                end = time.perf_counter()
                 self.add_scrape_duration(name, end - start)
         yield self._scrape_durations
