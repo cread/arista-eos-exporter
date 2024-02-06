@@ -307,16 +307,16 @@ class AristaMetricsCollector(object):
                     # check thresholds and generate alerts
                     thresholds = data["details"][sensor]
                     labels = [interface, lane, sensor]
-                    if data[sensor] > thresholds["highAlarm"]:
+                    if "highAlarm" in thresholds and data[sensor] > thresholds["highAlarm"]:
                         labels.append("highAlarm")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
-                    elif data[sensor] > thresholds["highWarn"]:
+                    elif "highWarn" in thresholds and data[sensor] > thresholds["highWarn"]:
                         labels.append("highWarn")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
-                    elif data[sensor] < thresholds["lowAlarm"]:
+                    elif "lowAlarm" in thresholds and data[sensor] < thresholds["lowAlarm"]:
                         labels.append("lowAlarm")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
-                    elif data[sensor] < thresholds["lowWarn"]:
+                    elif "lowWarn" in thresholds and data[sensor] < thresholds["lowWarn"]:
                         labels.append("lowWarn")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
 
