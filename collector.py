@@ -3,9 +3,9 @@ from prometheus_client.core import GaugeMetricFamily, InfoMetricFamily
 import logging
 import os
 import time
+import enum
 
 import pyeapi
-import ssl
 
 PORT_STATS_NAMES = [
     "inBroadcastPkts",
@@ -20,6 +20,12 @@ PORT_STATS_NAMES = [
     "outUcastPkts",
 ]
 
+
+class BGPState(enum.Enum):
+    Active = 0
+    Connect = 1
+    Idle = 2
+    Established = 3
 
 class AristaMetricsCollector(object):
     def __init__(self, config, target):
@@ -301,16 +307,16 @@ class AristaMetricsCollector(object):
                     # check thresholds and generate alerts
                     thresholds = data["details"][sensor]
                     labels = [interface, lane, sensor]
-                    if data[sensor] > thresholds["highAlarm"]:
+                    if "highAlarm" in thresholds and data[sensor] > thresholds["highAlarm"]:
                         labels.append("highAlarm")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
-                    elif data[sensor] > thresholds["highWarn"]:
+                    elif "highWarn" in thresholds and data[sensor] > thresholds["highWarn"]:
                         labels.append("highWarn")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
-                    elif data[sensor] < thresholds["lowAlarm"]:
+                    elif "lowAlarm" in thresholds and data[sensor] < thresholds["lowAlarm"]:
                         labels.append("lowAlarm")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
-                    elif data[sensor] < thresholds["lowWarn"]:
+                    elif "lowWarn" in thresholds and data[sensor] < thresholds["lowWarn"]:
                         labels.append("lowWarn")
                         sfp_alarms.add_metric(labels=labels, value=data[sensor])
 
@@ -318,51 +324,31 @@ class AristaMetricsCollector(object):
             yield sfp_alarms
 
     def collect_bgp(self):
-        data = self.switch_command("show ip bgp summary")
+        data = self.switch_command("show ip bgp summary vrf all")
         ipv4 = data["result"][0]["vrfs"]
-        data = self.switch_command("show ipv6 bgp summary")
+        data = self.switch_command("show ipv6 bgp summary vrf all")
         ipv6 = data["result"][0]["vrfs"]
 
         labels = ["vrf", "peer", "asn"]
         prefixes = GaugeMetricFamily(
             "arista_bgp_accepted_prefixes", "Number of prefixes accepted", labels=labels
         )
-        peer_state = InfoMetricFamily(
+        peer_state = GaugeMetricFamily(
             "arista_bgp_peer_state",
-            "State of the BGP peer",
-            labels=labels + ["state", "router_id"],
+            "State of the BGP peer. Values: 0=Active, 1=Connect, 2=Idle, 3=Established",
+            labels=labels + ["router_id"],
         )
 
-        for vrf, vrf_data in ipv4.items():
-            if "peers" not in vrf_data:
-                continue
-            router_id = vrf_data["routerId"]
-            for peer, peer_data in vrf_data["peers"].items():
-                labels = {
-                    "vrf": vrf,
-                    "router_id": router_id,
-                    "peer": peer,
-                    "asn": str(peer_data["asn"]),
-                    "state": peer_data["peerState"],
-                }
-                peer_state.add_metric(value=labels, labels=labels)
-                labels = [vrf, peer, str(peer_data["asn"])]
-                prefixes.add_metric(value=peer_data["prefixReceived"], labels=labels)
-        for vrf, vrf_data in ipv6.items():
-            if "peers" not in vrf_data:
-                continue
-            router_id = vrf_data["routerId"]
-            for peer, peer_data in vrf_data["peers"].items():
-                labels = {
-                    "vrf": vrf,
-                    "router_id": router_id,
-                    "peer": peer,
-                    "asn": str(peer_data["asn"]),
-                    "state": peer_data["peerState"],
-                }
-                peer_state.add_metric(value=labels, labels=labels)
-                labels = [vrf, peer, str(peer_data["asn"])]
-                prefixes.add_metric(value=peer_data["prefixReceived"], labels=labels)
+        for proto in (ipv4, ipv6):
+            for vrf, vrf_data in proto.items():
+                if "peers" not in vrf_data:
+                    continue
+                router_id = vrf_data["routerId"]
+                for peer, peer_data in vrf_data["peers"].items():
+                    prefix_labels = [vrf, peer, str(peer_data["asn"])]
+                    peer_state.add_metric(labels=prefix_labels + [router_id], value=BGPState[peer_data["peerState"]].value)
+                    prefixes.add_metric(labels=prefix_labels, value=peer_data["prefixReceived"])
+
         yield peer_state
         yield prefixes
 
@@ -467,9 +453,9 @@ class AristaMetricsCollector(object):
             )
 
             for name, generator in self.get_modules().items():
-                start = time.time()
+                start = time.perf_counter()
                 for metric in generator():
                     yield metric
-                end = time.time()
+                end = time.perf_counter()
                 self.add_scrape_duration(name, end - start)
         yield self._scrape_durations
